@@ -73,12 +73,32 @@ class CodeAnalyzer:
             method_id = f"{caller.file_path}::{caller.parent_class}.{call_name}"
             if method_id in self.parse_result.nodes:
                 return method_id
+            
+            for base_class in self._get_base_classes(caller.parent_class, caller.file_path):
+                base_method_id = f"{caller.file_path}::{base_class}.{call_name}"
+                if base_method_id in self.parse_result.nodes:
+                    return base_method_id
         
         for node_id, node in self.parse_result.nodes.items():
             if node.name == call_name:
                 return node_id
         
         return None
+    
+    def _get_base_classes(self, class_name: str, file_path: str) -> List[str]:
+        """Get base classes for a given class.
+        
+        Args:
+            class_name: Name of the class
+            file_path: File path of the class
+            
+        Returns:
+            List of base class names
+        """
+        class_id = f"{file_path}::{class_name}"
+        if class_id in self.parse_result.nodes:
+            return self.parse_result.nodes[class_id].base_classes
+        return []
     
     def _find_class(self, class_name: str, file_path: str) -> Optional[str]:
         """Find a class node by name.

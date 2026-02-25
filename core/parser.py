@@ -117,10 +117,10 @@ class PythonParser:
         """
         source_lines = source.split('\n')
         
-        for node in ast.walk(tree):
+        for node in tree.body:
             if isinstance(node, ast.ClassDef):
                 self._process_class(node, result, source_lines)
-            elif isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self._process_function(node, result, source_lines)
     
     def _process_class(self, node: ast.ClassDef, result: ParseResult, source_lines: List[str]):

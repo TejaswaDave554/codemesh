@@ -222,7 +222,7 @@ def render_class_hierarchy_tab(analyzer: CodeAnalyzer):
         st.info("No class inheritance relationships found")
         return
     
-    visualizer = ClassHierarchyVisualizer(class_hierarchy)
+    visualizer = ClassHierarchyVisualizer(class_hierarchy, analyzer.graph)
     fig = visualizer.create_hierarchy_figure()
     st.plotly_chart(fig, use_container_width=True)
 

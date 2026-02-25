@@ -17,13 +17,15 @@ class ClassHierarchyVisualizer:
     relationships with methods displayed on hover.
     """
     
-    def __init__(self, graph: nx.DiGraph):
+    def __init__(self, graph: nx.DiGraph, full_graph: nx.DiGraph = None):
         """Initialize visualizer with a graph.
         
         Args:
             graph: NetworkX directed graph containing class nodes
+            full_graph: Full graph with all nodes (for method lookup)
         """
         self.graph = graph
+        self.full_graph = full_graph if full_graph else graph
     
     def create_hierarchy_figure(self) -> go.Figure:
         """Create interactive class hierarchy visualization.
@@ -177,7 +179,7 @@ class ClassHierarchyVisualizer:
         file_path = self.graph.nodes[class_node]['file']
         
         methods = []
-        for node, data in self.graph.nodes(data=True):
+        for node, data in self.full_graph.nodes(data=True):
             if data['type'] == 'method' and data.get('parent_class') == class_name:
                 if data['file'] == file_path:
                     methods.append(data['name'])
