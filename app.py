@@ -181,10 +181,20 @@ def render_call_tree_tab(analyzer: CodeAnalyzer):
     nodes = list(analyzer.graph.nodes())
     node_names = [analyzer.graph.nodes[n]['name'] for n in nodes]
     
+    default_idx = 0
+    for i, node in enumerate(nodes):
+        if analyzer.graph.nodes[node]['name'] == 'main':
+            default_idx = i
+            break
+    else:
+        entry_points = [i for i, n in enumerate(nodes) if analyzer.graph.in_degree(n) == 0]
+        if entry_points:
+            default_idx = entry_points[0]
+    
     selected_name = st.selectbox(
         "Select root function",
         node_names,
-        index=0 if node_names else None
+        index=default_idx if node_names else 0
     )
     
     if selected_name:
@@ -380,6 +390,30 @@ def main():
                     if selected:
                         node_id = nodes[node_names.index(selected)]
                         st.session_state.selected_node = node_id
+                else:
+                    st.warning("No matches found")
+            
+            st.divider()
+            st.subheader("Call Trace Search")
+            search_function = st.text_input("Find where function is called", key="call_trace")
+            if search_function:
+                matches = [n for n in node_names if search_function.lower() in n.lower()]
+                if matches:
+                    selected_func = st.selectbox("Select function", matches, key="trace_select")
+                    if selected_func:
+                        func_id = nodes[node_names.index(selected_func)]
+                        callers = analyzer.get_callers(func_id)
+                        
+                        if callers:
+                            st.write(f"**{selected_func} is called by:**")
+                            for caller_id in callers:
+                                caller_name = analyzer.graph.nodes[caller_id]['name']
+                                caller_file = analyzer.graph.nodes[caller_id]['file']
+                                caller_line = analyzer.graph.nodes[caller_id]['line']
+                                st.text(f"• {caller_name}")
+                                st.caption(f"  {caller_file}:{caller_line}")
+                        else:
+                            st.info(f"{selected_func} is not called by any function (entry point)")
                 else:
                     st.warning("No matches found")
             
