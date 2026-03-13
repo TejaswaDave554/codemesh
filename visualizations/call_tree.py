@@ -25,6 +25,17 @@ class CallTreeVisualizer:
         """
         self.graph = graph
     
+    def create_interactive_plot(self, max_depth: int = 10) -> Optional[go.Figure]:
+        """Create interactive call tree visualization.
+        
+        Args:
+            max_depth: Maximum depth to display
+            
+        Returns:
+            Plotly Figure object or None
+        """
+        return self.create_tree_figure()
+    
     def create_tree_figure(self, root_node: Optional[str] = None) -> go.Figure:
         """Create interactive call tree visualization.
         
@@ -52,10 +63,25 @@ class CallTreeVisualizer:
                        layout=go.Layout(
                            showlegend=False,
                            hovermode='closest',
-                           margin=dict(b=0, l=0, r=0, t=40),
+                           margin=dict(b=30, l=30, r=30, t=70),  # Better margins
                            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
                            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                           title="Call Tree Visualization"
+                           title=dict(
+                               text="📊 Call Tree Visualization",
+                               x=0,  # Left align title
+                               font=dict(size=18)
+                           ),
+                           dragmode='pan',  # Pan by default
+                           plot_bgcolor='rgba(0,0,0,0)',  # Transparent background
+                           # Add border
+                           shapes=[
+                               dict(
+                                   type="rect",
+                                   xref="paper", yref="paper",
+                                   x0=0, y0=0, x1=1, y1=1,
+                                   line=dict(color="rgba(128,128,128,0.3)", width=1)
+                               )
+                           ]
                        ))
         
         return fig
@@ -114,9 +140,15 @@ class CallTreeVisualizer:
         levels = {root: 0}
         queue = [(root, 0)]
         visited = {root}
+        max_nodes = 1000  # Prevent excessive memory usage
         
-        while queue:
+        while queue and len(visited) < max_nodes:
             node, level = queue.pop(0)
+            
+            # Limit depth to prevent infinite loops
+            if level >= 50:
+                continue
+            
             for successor in self.graph.successors(node):
                 if successor not in visited:
                     visited.add(successor)
@@ -163,6 +195,7 @@ class CallTreeVisualizer:
         node_x = []
         node_y = []
         node_text = []
+        node_hover = []
         node_colors = []
         
         for node in pos:
@@ -171,15 +204,23 @@ class CallTreeVisualizer:
             node_y.append(y)
             
             data = self.graph.nodes[node]
-            node_text.append(f"{data['name']}<br>File: {data['file']}<br>Line: {data['line']}")
+            filename = data['file'].split('/')[-1].split('\\')[-1]
+            node_text.append(f"{data['name']}")
+            node_hover.append(
+                f"<b>{data['name']}</b><br>"
+                f"File: {filename}<br>"
+                f"Line: {data['line']}<br>"
+                f"Type: {data['type']}<br>"
+                f"Complexity: {data.get('complexity', 1)}"
+            )
             node_colors.append(get_node_color(data['type']))
         
         return go.Scatter(
             x=node_x, y=node_y,
             mode='markers+text',
-            text=[self.graph.nodes[n]['name'] for n in pos],
+            text=node_text,
             textposition="top center",
-            hovertext=node_text,
+            hovertext=node_hover,
             hoverinfo='text',
             marker=dict(
                 size=15,

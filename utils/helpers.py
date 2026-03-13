@@ -10,15 +10,16 @@ def get_node_color(node_type: str) -> str:
     """Get color code for different node types in visualizations.
     
     Args:
-        node_type: Type of node ('function', 'class', 'method')
+        node_type: Type of node ('function', 'class', 'method', 'external_file')
         
     Returns:
         Hex color code string
     """
     colors = {
-        'function': '#3498db',  # Blue
-        'class': '#2ecc71',     # Green
-        'method': '#e67e22'     # Orange
+        'function': '#3498db',      # Blue
+        'class': '#2ecc71',         # Green
+        'method': '#e67e22',        # Orange
+        'external_file': '#9b59b6'  # Purple
     }
     return colors.get(node_type, '#95a5a6')
 

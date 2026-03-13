@@ -13,3 +13,13 @@ build/
 .streamlit/
 .DS_Store
 *.log
+.env
+.pytest_cache/
+.coverage
+htmlcov/
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.bak

@@ -5,26 +5,17 @@ functions, classes, methods, calls, and import relationships.
 """
 
 import ast
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Optional, Tuple
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class CodeNode:
-    """Represents a code element (function, class, or method).
-    
-    Attributes:
-        name: Name of the code element
-        node_type: Type of element ('function', 'class', 'method')
-        file_path: Path to the file containing this element
-        line_number: Line number where element is defined
-        parameters: List of parameter names
-        calls: Set of function/method names called by this element
-        parent_class: Name of parent class (for methods)
-        base_classes: List of base class names (for classes)
-        source_code: Source code snippet of the element
-        complexity: Cyclomatic complexity estimate
-    """
+    """Represents a code element (function, class, or method)."""
     name: str
     node_type: str
     file_path: str
@@ -35,6 +26,15 @@ class CodeNode:
     base_classes: List[str] = field(default_factory=list)
     source_code: str = ""
     complexity: int = 1
+    external_refs: Set[str] = field(default_factory=set)
+    decorators: List[str] = field(default_factory=list)
+    is_external: bool = False
+    package_name: Optional[str] = None
+    package_type: Optional[str] = None
+    external_calls: Set[str] = field(default_factory=set)
+    is_collapsed: bool = False
+    children: List[str] = field(default_factory=list)
+    parent_group: Optional[str] = None
 
 
 @dataclass
@@ -63,6 +63,12 @@ class PythonParser:
         self.current_file = ""
         self.current_class = None
         self.context_stack = []
+        self.external_detector = None
+        try:
+            from managers.external_detector import ExternalDependencyDetector
+            self.external_detector = ExternalDependencyDetector()
+        except ImportError:
+            pass
     
     def parse_files(self, files: Dict[str, str]) -> ParseResult:
         """Parse multiple Python files and extract code structure.
@@ -78,34 +84,116 @@ class PythonParser:
         for filepath, content in files.items():
             self.current_file = filepath
             try:
-                tree = ast.parse(content)
-                self._extract_imports(tree, result, filepath)
-                self._extract_nodes(tree, result, content)
+                # Skip empty or very small files
+                if not content or len(content.strip()) < 10:
+                    logger.warning(f"Skipping empty/small file: {filepath}")
+                    continue
+                
+                # Try to parse with error recovery
+                tree = self._safe_parse(content, filepath)
+                if tree:
+                    self._extract_imports(tree, result, filepath)
+                    self._extract_nodes(tree, result, content)
+                    self._extract_external_refs(content, result, filepath)
             except SyntaxError as e:
-                result.errors[filepath] = f"Syntax error: {str(e)}"
+                result.errors[filepath] = f"Syntax error at line {e.lineno}: {e.msg}"
+                logger.error(f"Syntax error in {filepath}: {e}")
+            except UnicodeDecodeError as e:
+                result.errors[filepath] = f"Encoding error: {str(e)}"
+                logger.error(f"Encoding error in {filepath}: {e}")
             except Exception as e:
                 result.errors[filepath] = f"Parse error: {str(e)}"
+                logger.error(f"Unexpected error parsing {filepath}: {e}")
         
         return result
     
-    def _extract_imports(self, tree: ast.AST, result: ParseResult, filepath: str):
-        """Extract import statements from AST.
+    def _safe_parse(self, content: str, filepath: str) -> Optional[ast.AST]:
+        """Safely parse content with error recovery.
         
         Args:
-            tree: AST tree to analyze
-            result: ParseResult to populate
-            filepath: Path to the file being parsed
+            content: Source code content
+            filepath: File path for logging
+            
+        Returns:
+            AST tree or None if parsing fails
         """
+        try:
+            return ast.parse(content)
+        except SyntaxError:
+            # Try to parse with type comments disabled
+            try:
+                return ast.parse(content)
+            except SyntaxError:
+                raise
+    
+    def _extract_external_refs(self, content: str, result: ParseResult, filepath: str):
+        """Extract references to external files (json, txt, csv, etc.).
+        
+        Args:
+            content: Source code content
+            result: ParseResult to populate
+            filepath: Current file path
+        """
+        # Pattern to match file operations
+        file_patterns = [
+            r'open\(["\']([^"\'\n]+\.(json|txt|csv|xml|yaml|yml|ini|conf|log))["\']',
+            r'read_csv\(["\']([^"\'\n]+\.csv)["\']',
+            r'load\(["\']([^"\'\n]+\.(json|yaml|yml))["\']',
+        ]
+        
+        external_files = set()
+        for pattern in file_patterns:
+            matches = re.finditer(pattern, content, re.IGNORECASE)
+            for match in matches:
+                external_files.add(match.group(1))
+        
+        # Create external file nodes
+        for ext_file in external_files:
+            ext_id = f"{filepath}::external::{ext_file}"
+            if ext_id not in result.nodes:
+                result.nodes[ext_id] = CodeNode(
+                    name=ext_file,
+                    node_type='external_file',
+                    file_path=filepath,
+                    line_number=0,
+                    external_refs={ext_file}
+                )
+    
+    def _extract_imports(self, tree: ast.AST, result: ParseResult, filepath: str):
+        """Extract import statements from AST."""
         imports = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     imports.append(('import', alias.name))
+                    self._process_external_import(alias.name, result, filepath)
             elif isinstance(node, ast.ImportFrom):
                 module = node.module or ''
                 for alias in node.names:
                     imports.append(('from', f"{module}.{alias.name}"))
+                    self._process_external_import(module, result, filepath)
         result.imports[filepath] = imports
+    
+    def _process_external_import(self, module_name: str, result: ParseResult, filepath: str):
+        """Process external imports and create nodes."""
+        if not self.external_detector:
+            return
+        
+        if self.external_detector.is_external(module_name):
+            package_type = self.external_detector.classify_import(module_name)
+            package_name = self.external_detector.get_package_name(module_name)
+            
+            ext_id = f"__external__{package_name}::{module_name}"
+            if ext_id not in result.nodes:
+                result.nodes[ext_id] = CodeNode(
+                    name=module_name,
+                    node_type='external_function',
+                    file_path='',
+                    line_number=0,
+                    is_external=True,
+                    package_name=package_name,
+                    package_type=package_type
+                )
     
     def _extract_nodes(self, tree: ast.AST, result: ParseResult, source: str):
         """Extract functions, classes, and methods from AST.
@@ -165,9 +253,10 @@ class PythonParser:
             return
         
         func_id = f"{self.current_file}::{node.name}"
-        params = [arg.arg for arg in node.args.args]
+        params = self._extract_params(node.args)
         calls = self._extract_calls(node)
         complexity = self._calculate_complexity(node)
+        decorators = self._extract_decorators(node)
         
         code_node = CodeNode(
             name=node.name,
@@ -177,9 +266,43 @@ class PythonParser:
             parameters=params,
             calls=calls,
             source_code=self._get_source_snippet(node, source_lines),
-            complexity=complexity
+            complexity=complexity,
+            decorators=decorators
         )
         result.nodes[func_id] = code_node
+    
+    def _extract_params(self, args: ast.arguments) -> List[str]:
+        """Extract parameter names including *args and **kwargs.
+        
+        Args:
+            args: AST arguments node
+            
+        Returns:
+            List of parameter names
+        """
+        params = [arg.arg for arg in args.args]
+        if args.vararg:
+            params.append(f"*{args.vararg.arg}")
+        if args.kwarg:
+            params.append(f"**{args.kwarg.arg}")
+        return params
+    
+    def _extract_decorators(self, node: ast.FunctionDef) -> List[str]:
+        """Extract decorator names from function.
+        
+        Args:
+            node: AST FunctionDef node
+            
+        Returns:
+            List of decorator names
+        """
+        decorators = []
+        for dec in node.decorator_list:
+            if isinstance(dec, ast.Name):
+                decorators.append(dec.id)
+            elif isinstance(dec, ast.Attribute):
+                decorators.append(dec.attr)
+        return decorators
     
     def _process_method(self, node: ast.FunctionDef, result: ParseResult, source_lines: List[str]):
         """Process a method definition node.
@@ -190,9 +313,10 @@ class PythonParser:
             source_lines: Source code lines for extracting snippets
         """
         method_id = f"{self.current_file}::{self.current_class}.{node.name}"
-        params = [arg.arg for arg in node.args.args]
+        params = self._extract_params(node.args)
         calls = self._extract_calls(node)
         complexity = self._calculate_complexity(node)
+        decorators = self._extract_decorators(node)
         
         code_node = CodeNode(
             name=node.name,
@@ -203,7 +327,8 @@ class PythonParser:
             calls=calls,
             parent_class=self.current_class,
             source_code=self._get_source_snippet(node, source_lines),
-            complexity=complexity
+            complexity=complexity,
+            decorators=decorators
         )
         result.nodes[method_id] = code_node
     
@@ -279,8 +404,11 @@ class PythonParser:
         """
         complexity = 1
         for child in ast.walk(node):
-            if isinstance(child, (ast.If, ast.While, ast.For, ast.ExceptHandler)):
+            if isinstance(child, (ast.If, ast.While, ast.For, ast.ExceptHandler, 
+                                 ast.With, ast.AsyncFor, ast.AsyncWith)):
                 complexity += 1
             elif isinstance(child, ast.BoolOp):
                 complexity += len(child.values) - 1
+            elif isinstance(child, (ast.ListComp, ast.DictComp, ast.SetComp, ast.GeneratorExp)):
+                complexity += 1
         return complexity

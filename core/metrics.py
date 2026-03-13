@@ -7,6 +7,9 @@ function call counts, complexity, and dependency analysis.
 import networkx as nx
 from typing import Dict, List, Tuple
 from collections import Counter
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class MetricsCalculator:
@@ -48,7 +51,7 @@ class MetricsCalculator:
             top_n: Number of top results to return
             
         Returns:
-            List of tuples (node_id, name, call_count)
+            List of tuples (node_id, name, call_count) sorted by call count
         """
         call_counts = []
         for node in self.graph.nodes():
@@ -59,6 +62,37 @@ class MetricsCalculator:
         
         call_counts.sort(key=lambda x: x[2], reverse=True)
         return call_counts[:top_n]
+    
+    def get_nodes_by_complexity(self, top_n: int = 10) -> List[Tuple[str, str, int]]:
+        """Get nodes sorted by complexity.
+        
+        Args:
+            top_n: Number of top results to return
+            
+        Returns:
+            List of tuples (node_id, name, complexity) sorted by complexity
+        """
+        complexities = []
+        for node, data in self.graph.nodes(data=True):
+            if data['type'] in ['function', 'method']:
+                complexities.append((node, data['name'], data.get('complexity', 1)))
+        
+        complexities.sort(key=lambda x: x[2], reverse=True)
+        return complexities[:top_n]
+    
+    def get_sorted_nodes(self, sort_by: str = 'calls') -> List[Tuple[str, str, int]]:
+        """Get all nodes sorted by specified metric.
+        
+        Args:
+            sort_by: 'calls' or 'complexity'
+            
+        Returns:
+            List of tuples (node_id, name, metric_value)
+        """
+        if sort_by == 'complexity':
+            return self.get_nodes_by_complexity(top_n=self.graph.number_of_nodes())
+        else:
+            return self.get_most_called(top_n=self.graph.number_of_nodes())
     
     def get_unused_functions(self) -> List[Tuple[str, str]]:
         """Find functions with no callers (potentially unused).
@@ -83,9 +117,50 @@ class MetricsCalculator:
             return 0
         
         try:
-            return nx.dag_longest_path_length(self.graph)
-        except:
+            # Check if graph has cycles
+            if not nx.is_directed_acyclic_graph(self.graph):
+                # For cyclic graphs, use a different approach
+                max_depth = 0
+                for node in self.graph.nodes():
+                    try:
+                        # BFS with depth limit to avoid infinite loops
+                        depth = self._calculate_depth_bfs(node, max_limit=100)
+                        max_depth = max(max_depth, depth)
+                    except Exception:
+                        continue
+                return max_depth
+            else:
+                return nx.dag_longest_path_length(self.graph)
+        except (nx.NetworkXError, RecursionError) as e:
+            logger.warning(f"Error calculating max depth: {e}")
             return 0
+    
+    def _calculate_depth_bfs(self, start_node: str, max_limit: int = 100) -> int:
+        """Calculate depth using BFS with cycle detection.
+        
+        Args:
+            start_node: Starting node
+            max_limit: Maximum depth to prevent infinite loops
+            
+        Returns:
+            Maximum depth from start node
+        """
+        visited = {start_node}
+        queue = [(start_node, 0)]
+        max_depth = 0
+        
+        while queue:
+            node, depth = queue.pop(0)
+            if depth >= max_limit:
+                return max_limit
+            
+            max_depth = max(max_depth, depth)
+            for successor in self.graph.successors(node):
+                if successor not in visited:
+                    visited.add(successor)
+                    queue.append((successor, depth + 1))
+        
+        return max_depth
     
     def get_most_dependencies(self, top_n: int = 10) -> List[Tuple[str, str, int]]:
         """Find functions with most outgoing dependencies.
